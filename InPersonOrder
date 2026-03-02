@@ -1,0 +1,183 @@
+<script>
+(function() {
+
+  function waitForForm(callback) {
+    const interval = setInterval(() => {
+      const form = document.querySelector(".sqs-block-form form");
+      if (form) {
+        clearInterval(interval);
+        callback(form);
+      }
+    }, 300);
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+
+    waitForForm(function(form) {
+
+      if (form.dataset.initialized === "true") return;
+      form.dataset.initialized = "true";
+
+      const RAILWAY_URL = "https://YOUR-RAILWAY-URL.up.railway.app";
+
+      const priceDisplay = document.createElement("div");
+      priceDisplay.style.marginTop = "20px";
+      priceDisplay.style.fontWeight = "600";
+      form.appendChild(priceDisplay);
+
+      const getValue = label =>
+        form.querySelector(`[name="${label}"]`)?.value || "";
+
+      const getCheckbox = label =>
+        form.querySelector(`[name="${label}"]`)?.checked || false;
+
+      let discountCache = false;
+      let discountCheckedEmail = null;
+      let discountTimeout = null;
+
+      async function checkReturning(email) {
+        if (!email) return false;
+        if (email === discountCheckedEmail) return discountCache;
+
+        try {
+          const response = await fetch(`${RAILWAY_URL}/check-returning`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email })
+          });
+
+          const result = await response.json();
+          discountCache = !!result.returning;
+          discountCheckedEmail = email;
+          return discountCache;
+
+        } catch {
+          return false;
+        }
+      }
+
+      async function updatePrice() {
+        const email = getValue("Email");
+
+        const climber = parseInt(getValue("Climber Sheets")) || 0;
+        const skier = parseInt(getValue("Skier Sheets")) || 0;
+        const general = parseInt(getValue("General Sheets")) || 0;
+
+        let total = (climber + skier + general) * 25;
+
+        const isReturning = await checkReturning(email);
+
+        if (isReturning) {
+          total -= 15;
+          if (total < 0) total = 0;
+          priceDisplay.innerHTML = `Total: $${total} (Returning Customer Discount Applied)`;
+        } else {
+          priceDisplay.innerHTML = `Total: $${total}`;
+        }
+      }
+
+      function debouncedUpdate() {
+        clearTimeout(discountTimeout);
+        discountTimeout = setTimeout(updatePrice, 300);
+      }
+
+      form.querySelectorAll("input").forEach(el => {
+        el.addEventListener("input", debouncedUpdate);
+      });
+
+      form.addEventListener("submit", async function(e) {
+        e.preventDefault();
+
+        const submitButton = form.querySelector("button");
+        submitButton.disabled = true;
+
+        try {
+          const phone = getValue("Phone");
+          if (!phone) {
+            alert("Phone is required for pickup orders.");
+            submitButton.disabled = false;
+            return;
+          }
+
+          const fileInput = form.querySelector('input[type="file"]');
+          const file = fileInput?.files[0];
+
+          if (!file) {
+            alert("Please upload a photo.");
+            submitButton.disabled = false;
+            return;
+          }
+
+          const uploadData = new FormData();
+          uploadData.append("file", file);
+
+          const uploadResponse = await fetch(`${RAILWAY_URL}/upload-photo`, {
+            method: "POST",
+            body: uploadData
+          });
+
+          const uploadResult = await uploadResponse.json();
+
+          if (!uploadResult.url) {
+            alert("Photo upload failed.");
+            submitButton.disabled = false;
+            return;
+          }
+
+          const sheetSelections = [];
+
+          const climber = parseInt(getValue("Climber Sheets")) || 0;
+          const skier = parseInt(getValue("Skier Sheets")) || 0;
+          const general = parseInt(getValue("General Sheets")) || 0;
+
+          if (climber > 0)
+            sheetSelections.push({ product_type: "CLIMBER", quantity: climber, unit_price: 2500 });
+
+          if (skier > 0)
+            sheetSelections.push({ product_type: "SKIER", quantity: skier, unit_price: 2500 });
+
+          if (general > 0)
+            sheetSelections.push({ product_type: "GENERAL", quantity: general, unit_price: 2500 });
+
+          if (sheetSelections.length === 0) {
+            alert("Please select at least one sheet.");
+            submitButton.disabled = false;
+            return;
+          }
+
+          const response = await fetch(`${RAILWAY_URL}/create-order`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: getValue("Email"),
+              name: getValue("Name"),
+              phone_number: phone,
+              comments: getValue("Comments"),
+              fulfillment_type: "IN_PERSON",
+              gift_flag: getCheckbox("Who is this for?"),
+              sheetSelections,
+              original_photo_url: uploadResult.url
+            })
+          });
+
+          const data = await response.json();
+
+          if (!data.checkoutUrl) {
+            alert("Error creating checkout session.");
+            submitButton.disabled = false;
+            return;
+          }
+
+          window.location.href = data.checkoutUrl;
+
+        } catch (err) {
+          alert("Network error.");
+          submitButton.disabled = false;
+        }
+      });
+
+    });
+  });
+
+})();
+</script>
